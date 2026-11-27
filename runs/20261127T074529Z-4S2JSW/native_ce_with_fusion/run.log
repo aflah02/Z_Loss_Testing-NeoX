@@ -1,0 +1,22 @@
+[2026-11-27 07:54:27,227] [INFO] [real_accelerator.py:239:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+ERROR:root:[91m[FAIL][0mNeoXArgs.validate_values() fp16_lm_cross_entropy is not supported with cross_entropy_fusion, which computes in fp32.
+Unable to import Mamba kernels. Install them from our requirements/requirements-mamba.txt,     or directly from https://github.com/state-spaces/mamba
+For s3 checkpointing, please install boto3 either using requirements/requirements-s3.txt or https://github.com/boto/boto3
+For s3 checkpointing, please install hf_transfer either using requirements/requirements-s3.txt or https://github.com/huggingface/hf_transfer
+Traceback (most recent call last):
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 216, in <module>
+    run(yaml.safe_load(Path(sys.argv[1]).read_text()), Path(sys.argv[2]))
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 179, in run
+    main(input_args=["--megatron_config", encoded])
+  File "/tmp/z-loss-tbfOjj/train.py", line 24, in main
+    neox_args = NeoXArgs.consume_neox_args(
+  File "/tmp/z-loss-tbfOjj/megatron/neox_arguments/arguments.py", line 649, in consume_neox_args
+    return cls.from_dict(args_dict=megatron_config)
+  File "/tmp/z-loss-tbfOjj/megatron/neox_arguments/arguments.py", line 445, in from_dict
+    return cls(**config)
+  File "<string>", line 332, in __init__
+  File "/tmp/z-loss-tbfOjj/megatron/neox_arguments/arguments.py", line 276, in __post_init__
+    if not self.validate_values():
+  File "/tmp/z-loss-tbfOjj/megatron/neox_arguments/arguments.py", line 1634, in validate_values
+    raise ValueError(error_message)
+ValueError: [91m[FAIL][0mNeoXArgs.validate_values() fp16_lm_cross_entropy is not supported with cross_entropy_fusion, which computes in fp32.

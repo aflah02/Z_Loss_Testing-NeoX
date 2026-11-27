@@ -1,0 +1,35 @@
+# Each profile runs with both coefficients. Overrides are ordinary NeoX arguments.
+coefficients: {"off": 0.0, "on": 0.025}
+profiles:
+  lm_fp32: {}
+  lm_fp32_fused_tp2: {cross_entropy_fusion: true, num_gpus: 2, model_parallel_size: 2}
+  lm_fp16: {precision: fp16}
+  lm_fp16_native_tp2: {precision: fp16, fp16_lm_cross_entropy: true, num_gpus: 2, model_parallel_size: 2}
+  lm_fp16_fused: {precision: fp16, cross_entropy_fusion: true}
+  lm_bf16_tp2: {precision: bfloat16, num_gpus: 2, model_parallel_size: 2}
+  lm_bf16_fused_dp2: {precision: bfloat16, cross_entropy_fusion: true, num_gpus: 2}
+  lm_fp32_pp1: {pipe_parallel_size: 1}
+  lm_fp32_pp2: {num_gpus: 2, pipe_parallel_size: 2}
+  lm_bf16_fused_pp2: {precision: bfloat16, cross_entropy_fusion: true, num_gpus: 2, pipe_parallel_size: 2}
+  rm_fp32: {train_impl: rm}
+  rm_bf16: {train_impl: rm, precision: bfloat16}
+  rm_fp16: {train_impl: rm, precision: fp16}
+  rm_fp32_tp2: {train_impl: rm, num_gpus: 2, model_parallel_size: 2}
+  rm_fp32_dp2: {train_impl: rm, num_gpus: 2}
+additional:
+  lm_fp32_default: {}
+  lm_fp32_small: {z_loss: 0.0001}
+  rm_bf16_large: {train_impl: rm, precision: bfloat16, z_loss: 1.0}
+  lm_named_eval: {z_loss: 0.025, extra_eval_iters: [0], eval_loss_logging: separate, valid_data_names: [held_out], test_data_names: [final]}
+  lm_named_and_blended_eval: {z_loss: 0.025, extra_eval_iters: [0], eval_loss_logging: blended_and_separate, valid_data_names: [held_out], test_data_names: [final]}
+rejected:
+  native_ce_with_bf16:
+    config: {z_loss: 0.025, precision: bfloat16, fp16_lm_cross_entropy: true}
+    error: lm cross entropy in fp16 only support in fp16 mode
+  native_ce_with_fusion:
+    config: {z_loss: 0.025, precision: fp16, fp16_lm_cross_entropy: true, cross_entropy_fusion: true}
+    error: fp16_lm_cross_entropy is not supported with cross_entropy_fusion
+  rm_with_pipeline:
+    config: {z_loss: 0.025, train_impl: rm, pipe_parallel_size: 1}
+    exception: AssertionError
+    error: Pipeline parallel is currently unsupported when using any of kto, dpo, rm

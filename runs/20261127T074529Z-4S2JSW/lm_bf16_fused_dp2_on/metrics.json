@@ -1,0 +1,40 @@
+{
+  "train": {
+    "1": {
+      "lm_loss": 6.256783962249756,
+      "z_loss": 39.09398651123047,
+      "lm_loss_with_z_loss": 7.234133243560791
+    },
+    "2": {
+      "lm_loss": 6.249115943908691,
+      "z_loss": 39.047916412353516,
+      "lm_loss_with_z_loss": 7.225313663482666
+    }
+  },
+  "eval": [
+    {
+      "split": "validation",
+      "prefix": "iteration 1",
+      "lm_loss": 6.264244079589844,
+      "lm_loss_ppl": 525.4442417712017
+    },
+    {
+      "split": "validation",
+      "prefix": "iteration 2",
+      "lm_loss": 6.273666858673096,
+      "lm_loss_ppl": 530.4187869953992
+    },
+    {
+      "split": "validation",
+      "prefix": "the end of training for val data",
+      "lm_loss": 6.261634826660156,
+      "lm_loss_ppl": 524.075011954261
+    },
+    {
+      "split": "test",
+      "prefix": "the end of training for test data",
+      "lm_loss": 6.229282855987549,
+      "lm_loss_ppl": 507.3914802279979
+    }
+  ]
+}

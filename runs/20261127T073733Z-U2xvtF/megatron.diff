@@ -1,0 +1,552 @@
+diff --git a/megatron/fused_kernels/fused_cross_entropy.py b/megatron/fused_kernels/fused_cross_entropy.py
+index 0438261..8d5ed95 100644
+--- a/megatron/fused_kernels/fused_cross_entropy.py
++++ b/megatron/fused_kernels/fused_cross_entropy.py
+@@ -21,10 +21,11 @@ This implementation combines the target-logit and exponential-sum payloads so
+ that tensor-parallel execution needs two all-reduces instead of three.
+ """
+ 
+-from typing import Tuple
++from typing import Optional, Tuple
+ 
+ import torch
+ 
++from megatron.mpu.cross_entropy import calculate_gradients, calculate_loss
+ from megatron.mpu.utils import VocabUtility
+ 
+ 
+@@ -82,41 +83,23 @@ def calculate_predicted_logits(
+ def calculate_cross_entropy_loss(
+     exp_logits: torch.Tensor,
+     predicted_logits_sum_exp_logits: torch.Tensor,
+-) -> Tuple[torch.Tensor, torch.Tensor]:
++    logits_max: torch.Tensor,
++    compute_z_loss: bool,
++) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+     """Normalize probabilities and calculate the per-token loss."""
+     split_at = predicted_logits_sum_exp_logits.size(0) // 2
+     predicted_logits = predicted_logits_sum_exp_logits[:split_at]
+     sum_exp_logits = predicted_logits_sum_exp_logits[split_at:]
+-    loss = torch.log(sum_exp_logits) - predicted_logits
+     exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
+-    return exp_logits, loss
++    return calculate_loss(predicted_logits, sum_exp_logits, logits_max, compute_z_loss)
+ 
+ 
+-@torch.jit.script
+-def calculate_gradients(
+-    softmax: torch.Tensor,
+-    grad_output: torch.Tensor,
+-    target_mask: torch.Tensor,
+-    masked_target_1d: torch.Tensor,
+-    logits_dtype: torch.dtype,
+-) -> torch.Tensor:
+-    """Calculate logits gradients and restore the input logits dtype."""
+-    grad_input = softmax
+-    partition_vocab_size = softmax.size(-1)
+-    grad_2d = grad_input.view(-1, partition_vocab_size)
+-    arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
+-    softmax_update = 1.0 - target_mask.view(-1).float()
+-    grad_2d[arange_1d, masked_target_1d] -= softmax_update
+-    grad_input.mul_(grad_output.unsqueeze(dim=-1))
+-
+-    # Avoid an extra full-logits cast inserted by autograd when the forward
+-    # logits were upcast to fp32 internally.
+-    return grad_input.to(logits_dtype)
++fused_calculate_gradients = torch.jit.script(calculate_gradients)
+ 
+ 
+ class _VocabParallelCrossEntropy(torch.autograd.Function):
+     @staticmethod
+-    def forward(ctx, vocab_parallel_logits, target, tp_group):
++    def forward(ctx, vocab_parallel_logits, target, tp_group, compute_z_loss):
+         ctx.logits_dtype = vocab_parallel_logits.dtype
+         vocab_parallel_logits, logits_max = calculate_logits_max(vocab_parallel_logits)
+         torch.distributed.all_reduce(
+@@ -152,25 +135,34 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
+             group=tp_group,
+         )
+ 
+-        exp_logits, loss = calculate_cross_entropy_loss(
+-            exp_logits, predicted_logits_sum_exp_logits
++        loss, penalty, z_loss_grad = calculate_cross_entropy_loss(
++            exp_logits, predicted_logits_sum_exp_logits, logits_max, compute_z_loss
+         )
+-        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
+-        return loss
++        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d, z_loss_grad)
++        return loss, penalty
+ 
+     @staticmethod
+-    def backward(ctx, grad_output):
+-        softmax, target_mask, masked_target_1d = ctx.saved_tensors
+-        grad_input = calculate_gradients(
++    def backward(ctx, grad_output, grad_penalty):
++        softmax, target_mask, masked_target_1d, z_loss_grad = ctx.saved_tensors
++        grad_input = fused_calculate_gradients(
+             softmax,
+             grad_output,
+             target_mask,
+             masked_target_1d,
+             ctx.logits_dtype,
++            z_loss_grad,
++            grad_penalty,
+         )
+-        return grad_input, None, None
++        return grad_input, None, None, None
+ 
+ 
+-def fused_vocab_parallel_cross_entropy(vocab_parallel_logits, target, tp_group):
+-    """Calculate per-token CE for logits partitioned over ``tp_group``."""
+-    return _VocabParallelCrossEntropy.apply(vocab_parallel_logits, target, tp_group)
++def fused_vocab_parallel_cross_entropy(
++    vocab_parallel_logits, target, tp_group, z_loss=0.0, return_components=False
++):
++    """Return the per-token objective or the separate CE and raw Z-loss over ``tp_group``."""
++    loss, penalty = _VocabParallelCrossEntropy.apply(
++        vocab_parallel_logits, target, tp_group, z_loss != 0.0
++    )
++    if return_components:
++        return loss, penalty
++    return loss if penalty is None else loss + z_loss * penalty
+diff --git a/megatron/model/gpt2_model.py b/megatron/model/gpt2_model.py
+index b25cb24..df1f2ab 100644
+--- a/megatron/model/gpt2_model.py
++++ b/megatron/model/gpt2_model.py
+@@ -22,7 +22,6 @@ import torch
+ import torch.nn as nn
+ from collections import defaultdict
+ 
+-from functools import partial
+ from megatron.model.utils import Lambda, SequentialWrapper, recursive_setattr
+ from megatron.model.norms import get_norm
+ from megatron.model.parameterization import (
+@@ -60,81 +59,60 @@ def gpt2_attention_mask_func(attention_scores, ltor_mask):
+     return attention_scores
+ 
+ 
+-class _VocabParallelZLoss(torch.autograd.Function):
+-    @staticmethod
+-    def forward(ctx, vocab_parallel_logits):
+-        logits = vocab_parallel_logits.float()
+-        logits_max = torch.max(logits, dim=-1)[0]
+-        torch.distributed.all_reduce(
+-            logits_max,
+-            op=torch.distributed.ReduceOp.MAX,
+-            group=mpu.get_model_parallel_group(),
+-        )
+-
+-        exp_logits = torch.exp(logits - logits_max.unsqueeze(dim=-1))
+-        sum_exp_logits = exp_logits.sum(dim=-1)
+-        torch.distributed.all_reduce(
+-            sum_exp_logits,
+-            op=torch.distributed.ReduceOp.SUM,
+-            group=mpu.get_model_parallel_group(),
+-        )
+-
+-        softmax = exp_logits.div(sum_exp_logits.unsqueeze(dim=-1))
+-        log_z = torch.log(sum_exp_logits) + logits_max
+-        ctx.input_dtype = vocab_parallel_logits.dtype
+-        ctx.save_for_backward(softmax, log_z)
+-        return log_z.square()
+-
+-    @staticmethod
+-    def backward(ctx, grad_output):
+-        softmax, log_z = ctx.saved_tensors
+-        grad_input = 2 * log_z.unsqueeze(dim=-1) * softmax
+-        grad_input.mul_(grad_output.unsqueeze(dim=-1))
+-        return grad_input.to(ctx.input_dtype)
+-
+-
+-def vocab_parallel_z_loss(vocab_parallel_logits, loss_mask):
+-    """Masked mean squared log-partition penalty for vocab-parallel logits."""
+-    z_losses = _VocabParallelZLoss.apply(vocab_parallel_logits)
+-    loss_mask = loss_mask.view(-1)
+-    return torch.sum(z_losses.view(-1) * loss_mask) / loss_mask.sum()
+-
+-
+-def cross_entropy(output, labels, _fp16=False, _fused=False, z_loss=0.0):
+-    """From pretrain_gpt2:forward_step()"""
+-    """
+-    if self.fp16_lm_cross_entropy:
+-        assert output.dtype == torch.half
+-        loss = mpu.vocab_parallel_cross_entropy(output, labels)
+-    else:
+-        loss = mpu.vocab_parallel_cross_entropy(output.float(), labels)
+-        return loss
+-    """
++def add_z_loss(loss, penalty, coefficient, metrics):
++    """Log the raw penalty and apply its coefficient to the training objective."""
++    if metrics is not None:
++        metrics["lm_loss"] = loss.detach()
++        metrics["z_loss"] = penalty.detach()
++    return loss + coefficient * penalty
++
++
++def cross_entropy(
++    output,
++    labels,
++    _fp16=False,
++    _fused=False,
++    z_loss=0.0,
++    metrics=None,
++    preserve_logits=False,
++):
++    """Masked mean of the vocabulary-parallel LM loss."""
+     labels, loss_mask = labels[0], labels[1]
+-    z_loss_value = None
+-    if z_loss != 0:
+-        z_loss_value = z_loss * vocab_parallel_z_loss(output, loss_mask)
+     if _fp16:
+-        assert output.dtype == torch.half and loss_mask.dtype == torch.half
++        assert output.dtype == torch.half
++    if preserve_logits and (
++        (_fp16 and z_loss == 0.0) or (_fused and output.dtype == torch.float32)
++    ):
++        # These kernels can reuse the caller's storage. Evaluation may return the original logits.
++        output = output.clone(memory_format=torch.contiguous_format)
+     if _fused:
+         from megatron.fused_kernels.fused_cross_entropy import (
+             fused_vocab_parallel_cross_entropy,
+         )
+ 
+-        losses = fused_vocab_parallel_cross_entropy(
+-            output.contiguous(), labels, mpu.get_model_parallel_group()
++        losses, penalties = fused_vocab_parallel_cross_entropy(
++            output.contiguous(),
++            labels,
++            mpu.get_model_parallel_group(),
++            z_loss=z_loss,
++            return_components=True,
+         )
+-    elif _fp16:
+-        losses = mpu.vocab_parallel_cross_entropy(output.contiguous(), labels)
+     else:
+-        # vocab_parallel_cross_entropy overwrites its input, so fp32 logits need a copy
+-        losses = mpu.vocab_parallel_cross_entropy(
+-            output.to(torch.float32, copy=True).contiguous(), labels
++        if not _fp16:
++            # Standard CE overwrites its input, so FP32 logits need a copy.
++            output = output.to(torch.float32, copy=True)
++        losses, penalties = mpu.vocab_parallel_cross_entropy(
++            output.contiguous(), labels, z_loss=z_loss, return_components=True
+         )
+     loss_mask = loss_mask.view(-1)
+-    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+-    if z_loss_value is not None:
+-        loss = loss + z_loss_value
++    masked_losses = losses.view(-1) * loss_mask
++    # Native FP16 CE can have more valid tokens than an FP16 sum can represent.
++    sum_dtype = torch.promote_types(masked_losses.dtype, torch.float32)
++    weight = loss_mask.sum(dtype=sum_dtype)
++    loss = (masked_losses.sum(dtype=sum_dtype) / weight).to(masked_losses.dtype)
++    if penalties is not None:
++        penalty = (penalties.view(-1) * loss_mask).sum() / weight
++        loss = add_z_loss(loss, penalty, z_loss, metrics)
+     return loss
+ 
+ 
+@@ -194,15 +172,12 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
+ 
+         self.specs = []
+         self.init_specs()  # initializes the layer specs (basically a fancy nn.Sequential)
++        # Earlier pipeline stages need the same metric keys to receive the engine's broadcast.
++        self._loss_metrics = dict.fromkeys(("lm_loss", "z_loss"))
+ 
+         super().__init__(
+             layers=self.specs,
+-            loss_fn=partial(
+-                cross_entropy,
+-                _fp16=self.neox_args.fp16_lm_cross_entropy,
+-                _fused=self.neox_args.cross_entropy_fusion,
+-                z_loss=self.neox_args.z_loss,
+-            ),
++            loss_fn=self._pipeline_loss,
+             topology=topology,
+             activation_checkpoint_interval=self.neox_args.checkpoint_num_layers
+             if self.neox_args.checkpoint_activations
+@@ -215,6 +190,23 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
+             ],
+         )
+ 
++    def _pipeline_loss(self, output, labels):
++        return cross_entropy(
++            output,
++            labels,
++            _fp16=self.neox_args.fp16_lm_cross_entropy,
++            _fused=self.neox_args.cross_entropy_fusion,
++            z_loss=self.neox_args.z_loss if self.training else 0.0,
++            metrics=self.get_additional_losses(),
++            preserve_logits=not self.training,
++        )
++
++    def get_additional_losses(self):
++        """Microbatch metrics aggregated by the DeepSpeed pipeline engine."""
++        if self.training and self.neox_args.z_loss != 0.0:
++            return self._loss_metrics
++        return None
++
+     def insert_layers(
+         self, layers: Union[nn.Module, nn.ModuleList, nn.Sequential, List], idx
+     ):
+diff --git a/megatron/mpu/cross_entropy.py b/megatron/mpu/cross_entropy.py
+index a4777d1..38c636d 100644
+--- a/megatron/mpu/cross_entropy.py
++++ b/megatron/mpu/cross_entropy.py
+@@ -16,6 +16,8 @@
+ # limitations under the License.
+ 
+ 
++from typing import Optional, Tuple
++
+ import torch
+ 
+ from .initialize import get_model_parallel_group
+@@ -24,9 +26,60 @@ from .initialize import get_model_parallel_world_size
+ from .utils import VocabUtility
+ 
+ 
++def calculate_loss(
++    predicted_logits: torch.Tensor,
++    sum_exp_logits: torch.Tensor,
++    logits_max: torch.Tensor,
++    compute_z_loss: bool,
++) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
++    """Per-token CE, raw Z-loss, and its derivative with respect to log Z."""
++    log_sum_exp = sum_exp_logits.log()
++    loss = log_sum_exp - predicted_logits
++    if not compute_z_loss:
++        return loss, None, None
++
++    # The target logit is max-shifted for CE. Z-loss needs the original log Z.
++    log_z = log_sum_exp + logits_max
++    return loss, log_z.square(), 2.0 * log_z
++
++
++def calculate_gradients(
++    softmax: torch.Tensor,
++    grad_output: torch.Tensor,
++    target_mask: torch.Tensor,
++    masked_target_1d: torch.Tensor,
++    logits_dtype: torch.dtype,
++    z_loss_grad: Optional[torch.Tensor],
++    grad_penalty: Optional[torch.Tensor],
++) -> torch.Tensor:
++    """Reuse the saved softmax as the gradient buffer for this vocabulary shard."""
++    grad_2d = softmax.view(-1, softmax.size(-1))
++    rows = torch.arange(grad_2d.size(0), device=softmax.device)
++    local_target = 1.0 - target_mask.reshape(-1).float()
++    if z_loss_grad is None or grad_penalty is None:
++        grad_2d[rows, masked_target_1d] -= local_target
++        softmax.mul_(grad_output.unsqueeze(-1))
++    else:
++        # Subtract the CE target first so a small Z gradient survives when p(target) rounds to 1.
++        target_probs = grad_2d[rows, masked_target_1d]
++        grad_log_z = grad_penalty * z_loss_grad
++        target_grad = torch.addcmul(
++            (target_probs - local_target) * grad_output.reshape(-1),
++            target_probs,
++            grad_log_z.reshape(-1),
++        )
++        softmax.mul_((grad_output + grad_log_z).unsqueeze(-1))
++        grad_2d[rows, masked_target_1d] = target_grad
++    return softmax.to(logits_dtype)
++
++
+ class _VocabParallelCrossEntropy(torch.autograd.Function):
+     @staticmethod
+-    def forward(ctx, vocab_parallel_logits, target):
++    def forward(ctx, vocab_parallel_logits, target, compute_z_loss):
++        ctx.logits_dtype = vocab_parallel_logits.dtype
++        if compute_z_loss and ctx.logits_dtype in (torch.float16, torch.bfloat16):
++            # The joint loss shares the FP32 normalization required by Z-loss.
++            vocab_parallel_logits = vocab_parallel_logits.float()
+ 
+         # Maximum value along vocab dimension across all GPUs.
+         logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
+@@ -81,37 +134,37 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
+             group=get_model_parallel_group(),
+         )
+ 
+-        # Loss = log(sum(exp(logits))) - predicted-logit.
+-        loss = torch.log(sum_exp_logits) - predicted_logits
++        loss, penalty, z_loss_grad = calculate_loss(
++            predicted_logits, sum_exp_logits, logits_max, compute_z_loss
++        )
+ 
+-        # Store softmax, target-mask and masked-target for backward pass.
+         exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
+-        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
++        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d, z_loss_grad)
+ 
+-        return loss
++        return loss, penalty
+ 
+     @staticmethod
+-    def backward(ctx, grad_output):
+-
+-        # Retrieve tensors from the forward path.
+-        softmax, target_mask, masked_target_1d = ctx.saved_tensors
+-
+-        # All the inputs have softmax as their gradient.
+-        grad_input = softmax
+-        # For simplicity, work with the 2D gradient.
+-        partition_vocab_size = softmax.size()[-1]
+-        grad_2d = grad_input.view(-1, partition_vocab_size)
+-
+-        # Add the gradient from matching classes.
+-        arange_1d = torch.arange(start=0, end=grad_2d.size()[0], device=grad_2d.device)
+-        grad_2d[arange_1d, masked_target_1d] -= 1.0 - target_mask.view(-1).float()
+-
+-        # Finally elementwise multiplication with the output gradients.
+-        grad_input.mul_(grad_output.unsqueeze(dim=-1))
+-
+-        return grad_input, None
+-
+-
+-def vocab_parallel_cross_entropy(vocab_parallel_logits, target):
+-    """Helper function for the cross entropy."""
+-    return _VocabParallelCrossEntropy.apply(vocab_parallel_logits, target)
++    def backward(ctx, grad_output, grad_penalty):
++        softmax, target_mask, masked_target_1d, z_loss_grad = ctx.saved_tensors
++        grad_input = calculate_gradients(
++            softmax,
++            grad_output,
++            target_mask,
++            masked_target_1d,
++            ctx.logits_dtype,
++            z_loss_grad,
++            grad_penalty,
++        )
++        return grad_input, None, None
++
++
++def vocab_parallel_cross_entropy(
++    vocab_parallel_logits, target, z_loss=0.0, return_components=False
++):
++    """Return the per-token objective or the separate CE and raw Z-loss."""
++    loss, penalty = _VocabParallelCrossEntropy.apply(
++        vocab_parallel_logits, target, z_loss != 0.0
++    )
++    if return_components:
++        return loss, penalty
++    return loss if penalty is None else loss + z_loss * penalty
+diff --git a/megatron/neox_arguments/neox_args.py b/megatron/neox_arguments/neox_args.py
+index c96dbf3..f98b66b 100644
+--- a/megatron/neox_arguments/neox_args.py
++++ b/megatron/neox_arguments/neox_args.py
+@@ -407,7 +407,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
+ 
+     fp16_lm_cross_entropy: bool = False
+     """
+-    Move the cross entropy unreduced loss calculation for lm head to fp16.
++    Compute per-token LM cross entropy in FP16. When LM Z-loss is enabled, the combined loss uses FP32.
+     """
+ 
+     cross_entropy_fusion: bool = False
+@@ -1329,7 +1329,9 @@ class NeoXArgsTraining(NeoXArgsTemplate):
+ 
+     z_loss: float = 0.0
+     """
+-    Z-loss coefficient for normal LLM and RM training.
++    Z-loss coefficient for normal LLM and RM training. Evaluation uses the unregularized loss.
++    Training always logs lm_loss. When enabled, it also logs z_loss (the raw penalty)
++    and lm_loss_with_z_loss (lm_loss + this coefficient * z_loss).
+     https://arxiv.org/pdf/2204.02311
+     https://arxiv.org/pdf/2309.10305
+     """
+diff --git a/megatron/training.py b/megatron/training.py
+index b89fba6..aea6f01 100644
+--- a/megatron/training.py
++++ b/megatron/training.py
+@@ -69,7 +69,7 @@ from megatron.utils import (
+     CharCounter,
+ )
+ from megatron.model.weight_server import start_server
+-from megatron.model.gpt2_model import cross_entropy
++from megatron.model.gpt2_model import add_z_loss, cross_entropy
+ from megatron.mpu import vocab_parallel_cross_entropy
+ 
+ from pickle import dump
+@@ -624,7 +624,9 @@ def forward_step(
+             (labels, loss_mask),
+             _fp16=neox_args.fp16_lm_cross_entropy,
+             _fused=neox_args.cross_entropy_fusion,
+-            z_loss=neox_args.z_loss,
++            z_loss=neox_args.z_loss if is_train else 0.0,
++            metrics=metrics,
++            preserve_logits=return_logits,
+         )
+     elif neox_args.train_impl == "rm":
+         maybe_tuple = model((tokens, position_ids, attention_mask), neox_args=neox_args)
+@@ -650,8 +652,9 @@ def forward_step(
+             metrics["margin"] = (pos - neg).clone().detach().mean()
+             metrics["accuracy"] = ((pos - neg) > 0).clone().detach().float().mean()
+         loss = -F.logsigmoid(pos - neg).mean()
+-        if neox_args.z_loss != 0:
+-            loss = loss + (neox_args.z_loss * (pos**2 + neg**2)).mean()
++        if is_train and neox_args.z_loss != 0:
++            penalty = (pos.square() + neg.square()).mean()
++            loss = add_z_loss(loss, penalty, neox_args.z_loss, metrics)
+     elif neox_args.train_impl == "dpo":
+         # Based on https://github.com/eric-mitchell/direct-preference-optimization/blob/main/trainers.py#L90
+         with torch.inference_mode():
+@@ -1270,6 +1273,13 @@ def backward_step(neox_args, timers, optimizer, model, loss):
+         raise ValueError("Must be using deepspeed to run neox")
+ 
+ 
++def _training_loss_metrics(loss, additional_metrics):
++    metrics = dict(additional_metrics or {})
++    loss_name = "lm_loss_with_z_loss" if "z_loss" in metrics else "lm_loss"
++    metrics[loss_name] = loss.detach()
++    return metrics
++
++
+ def train_step(
+     neox_args,
+     timers,
+@@ -1294,7 +1304,6 @@ def train_step(
+         ):
+             save_snapshot(neox_args)
+     else:
+-        losses = []
+         metric_dicts = defaultdict(list)
+         for _ in range(neox_args.gradient_accumulation_steps):
+             # Forward model for one step.
+@@ -1308,9 +1317,8 @@ def train_step(
+                 reference_model=reference_model,
+             )
+             timers("forward").stop()
+-            losses.append(loss)
+-            for key in metric_dict.keys():
+-                metric_dicts[key].append(metric_dict[key])
++            for key, value in _training_loss_metrics(loss, metric_dict).items():
++                metric_dicts[key].append(value)
+             # Calculate gradients, reduce across processes, and clip.
+             if (
+                 neox_args.profile
+@@ -1360,11 +1368,9 @@ def train_step(
+                 and torch.distributed.get_rank() == 0
+             ):
+                 save_snapshot(neox_args)
+-        # reduces metrics across machines for logging
+-        reduce_metrics = {
+-            key: reduce_losses(metric_dicts[key]).mean() for key in metric_dicts.keys()
+-        }
+-        reduce_metrics["lm_loss"] = reduce_losses(losses).mean()
++        # Average microbatches locally and reduce all scalar metrics in one collective.
++        means = [torch.stack(values).mean() for values in metric_dicts.values()]
++        reduce_metrics = dict(zip(metric_dicts, reduce_losses(means)))
+ 
+     if neox_args.precision == "fp16" and model.optimizer.overflow:
+         skipped_iter = 1
+@@ -1380,7 +1386,8 @@ def train_step_pipe(neox_args, timers, model, data_iterator):
+ 
+     assert neox_args.deepspeed
+     loss = model.train_batch(data_iter=data_iterator)
+-    loss_dict = {"lm_loss": loss}
++    additional = model.get_additional_losses() if neox_args.z_loss != 0.0 else None
++    loss_dict = _training_loss_metrics(loss, additional)
+     # Don't break Megatron's timers because we changed code paths.
+     for t in [
+         "forward",

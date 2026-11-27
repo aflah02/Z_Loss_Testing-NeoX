@@ -1,0 +1,56 @@
+{
+  "train": {
+    "1": {
+      "lm_loss": 0.6392285823822021,
+      "z_loss": 0.011031035333871841,
+      "lm_loss_with_z_loss": 0.6395043730735779
+    },
+    "2": {
+      "lm_loss": 0.6861353516578674,
+      "z_loss": 0.17791016399860382,
+      "lm_loss_with_z_loss": 0.6905831098556519
+    }
+  },
+  "eval": [
+    {
+      "split": "validation",
+      "prefix": "iteration 1",
+      "lm_loss": 0.6249404549598694,
+      "pos_values": 0.03224797174334526,
+      "neg_values": -0.14951857924461365,
+      "margin": 0.1817665547132492,
+      "accuracy": 0.5,
+      "lm_loss_ppl": 1.868134715963685
+    },
+    {
+      "split": "validation",
+      "prefix": "iteration 2",
+      "lm_loss": 0.7237359285354614,
+      "pos_values": 0.22643625736236572,
+      "neg_values": 0.22404514253139496,
+      "margin": 0.002391129732131958,
+      "accuracy": 0.5,
+      "lm_loss_ppl": 2.06212278119905
+    },
+    {
+      "split": "validation",
+      "prefix": "the end of training for val data",
+      "lm_loss": 0.895172119140625,
+      "pos_values": -0.2188703864812851,
+      "neg_values": 0.1349618136882782,
+      "margin": -0.3538322150707245,
+      "accuracy": 0.0,
+      "lm_loss_ppl": 2.447757059048454
+    },
+    {
+      "split": "test",
+      "prefix": "the end of training for test data",
+      "lm_loss": 0.5045847296714783,
+      "pos_values": 0.4704434871673584,
+      "neg_values": 0.02000357210636139,
+      "margin": 0.4504399299621582,
+      "accuracy": 1.0,
+      "lm_loss_ppl": 1.6562975663927557
+    }
+  ]
+}

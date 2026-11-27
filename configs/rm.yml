@@ -1,0 +1,14 @@
+train_impl: rm
+dataset_impl: pairwise
+pos_train_data_paths: [data/train_pos]
+neg_train_data_paths: [data/train_neg]
+pos_valid_data_paths: [data/valid_pos]
+neg_valid_data_paths: [data/valid_neg]
+pos_test_data_paths: [data/test_pos]
+neg_test_data_paths: [data/test_neg]
+pos_train_label_data_paths: [data/train_pos_labels]
+neg_train_label_data_paths: [data/train_neg_labels]
+pos_valid_label_data_paths: [data/valid_pos_labels]
+neg_valid_label_data_paths: [data/valid_neg_labels]
+pos_test_label_data_paths: [data/test_pos_labels]
+neg_test_label_data_paths: [data/test_neg_labels]

@@ -1,0 +1,84 @@
+[2026-11-27 07:28:16,123] [INFO] [real_accelerator.py:239:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2026-11-27 07:28:16,142] [INFO] [real_accelerator.py:239:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+Unable to import Mamba kernels. Install them from our requirements/requirements-mamba.txt,     or directly from https://github.com/state-spaces/mamba
+Unable to import Mamba kernels. Install them from our requirements/requirements-mamba.txt,     or directly from https://github.com/state-spaces/mamba
+For s3 checkpointing, please install boto3 either using requirements/requirements-s3.txt or https://github.com/boto/boto3
+For s3 checkpointing, please install hf_transfer either using requirements/requirements-s3.txt or https://github.com/huggingface/hf_transfer
+For s3 checkpointing, please install boto3 either using requirements/requirements-s3.txt or https://github.com/boto/boto3
+For s3 checkpointing, please install hf_transfer either using requirements/requirements-s3.txt or https://github.com/huggingface/hf_transfer
+Traceback (most recent call last):
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 141, in <module>
+    run(yaml.safe_load(Path(sys.argv[1]).read_text()), Path(sys.argv[2]))
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 126, in run
+Traceback (most recent call last):
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 141, in <module>
+    main(input_args=["--megatron_config", encoded])
+  File "/tmp/z-loss-yAjuLo/train.py", line 24, in main
+    run(yaml.safe_load(Path(sys.argv[1]).read_text()), Path(sys.argv[2]))
+  File "/checkout/logs/z_loss_testing/train_checked.py", line 126, in run
+    neox_args = NeoXArgs.consume_neox_args(
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 649, in consume_neox_args
+    main(input_args=["--megatron_config", encoded])
+  File "/tmp/z-loss-yAjuLo/train.py", line 24, in main
+    return cls.from_dict(args_dict=megatron_config)
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 445, in from_dict
+    neox_args = NeoXArgs.consume_neox_args(
+    return cls(**config)
+  File "<string>", line 332, in __init__
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 649, in consume_neox_args
+    return cls.from_dict(args_dict=megatron_config)
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 445, in from_dict
+    return cls(**config)
+  File "<string>", line 332, in __init__
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 268, in __post_init__
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 268, in __post_init__
+    self.calculate_derived()
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 1153, in calculate_derived
+    self.calculate_derived()
+  File "/tmp/z-loss-yAjuLo/megatron/neox_arguments/arguments.py", line 1153, in calculate_derived
+    zero_stage = self.zero_optimization["stage"]
+TypeError: 'NoneType' object is not subscriptable
+    zero_stage = self.zero_optimization["stage"]
+TypeError: 'NoneType' object is not subscriptable
+[2026-11-27 07:28:24,641] torch.distributed.elastic.multiprocessing.api: [ERROR] failed (exitcode: 1) local_rank: 0 (pid: 442) of binary: /usr/bin/python
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/run.py", line 816, in <module>
+    main()
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 347, in wrapper
+    return f(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/run.py", line 812, in main
+    run(args)
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/run.py", line 803, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/launcher/api.py", line 135, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/usr/local/lib/python3.10/dist-packages/torch/distributed/launcher/api.py", line 268, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+/checkout/logs/z_loss_testing/train_checked.py FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-11-27_07:28:24
+  host      : 17e48322c65a
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 443)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-11-27_07:28:24
+  host      : 17e48322c65a
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 442)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================

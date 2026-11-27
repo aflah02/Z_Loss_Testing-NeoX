@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.0.0, pluggy-1.4.0 -- /usr/bin/python
+hypothesis profile 'default' -> database=DirectoryBasedExampleDatabase('/tmp/z-loss-tbfOjj/.hypothesis/examples')
+rootdir: /tmp/z-loss-tbfOjj
+configfile: tests/pytest.ini
+plugins: shard-0.1.2, hypothesis-5.35.1, flakefinder-1.1.0, xdist-3.5.0, rerunfailures-13.0, xdoctest-1.0.2
+collecting ... collected 7 items
+Running 7 items in this shard: tests/model/test_z_loss.py::test_tensor_parallel_lm_loss_matches_dense_loss_and_gradients, tests/model/test_z_loss.py::test_pipeline_loss_uses_configured_z_loss_only_in_training[0.0], tests/model/test_z_loss.py::test_pipeline_loss_uses_configured_z_loss_only_in_training[0.125], tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[False-0.0], tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[False-0.125], tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[True-0.0], tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[True-0.125]
+
+tests/model/test_z_loss.py::test_tensor_parallel_lm_loss_matches_dense_loss_and_gradients PASSED [ 14%]
+tests/model/test_z_loss.py::test_pipeline_loss_uses_configured_z_loss_only_in_training[0.0] PASSED [ 28%]
+tests/model/test_z_loss.py::test_pipeline_loss_uses_configured_z_loss_only_in_training[0.125] PASSED [ 42%]
+tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[False-0.0] PASSED [ 57%]
+tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[False-0.125] PASSED [ 71%]
+tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[True-0.0] PASSED [ 85%]
+tests/model/test_z_loss.py::test_reward_model_z_loss_uses_selected_scores[True-0.125] PASSED [100%]
+
+=============================== warnings summary ===============================
+../../usr/local/lib/python3.10/dist-packages/wandb/analytics/sentry.py:90
+  /usr/local/lib/python3.10/dist-packages/wandb/analytics/sentry.py:90: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+    self.hub = sentry_sdk.Hub(client)
+
+tests/model/test_z_loss.py::test_tensor_parallel_lm_loss_matches_dense_loss_and_gradients
+  /tmp/z-loss-tbfOjj/tests/conftest.py:43: UserWarning: Running test without verifying torch version, please provide an expected torch version with --torch_ver
+    warnings.warn(
+
+tests/model/test_z_loss.py::test_tensor_parallel_lm_loss_matches_dense_loss_and_gradients
+  /tmp/z-loss-tbfOjj/tests/conftest.py:52: UserWarning: Running test without verifying cuda version, please provide an expected cuda version with --cuda_ver
+    warnings.warn(
+
+tests/model/test_z_loss.py::test_pipeline_loss_uses_configured_z_loss_only_in_training[0.0]
+  <string>:8: PytestDeprecationWarning: A private pytest class or function was used.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+----------------- generated xml file: /results/z_loss_unit.xml -----------------
+======================== 7 passed, 4 warnings in 17.68s ========================
